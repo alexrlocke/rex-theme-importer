@@ -11,14 +11,9 @@ and [Ghostty](https://ghostty.org) installed, for its themes.
 ## Install
 
 ```sh
-git clone https://github.com/alexrlocke/rex-theme-importer.git ~/code/rex-theme-importer
-```
-
-Add this to `~/.config/rex/init.lua`, using the folder you cloned into, then
-run `rex config reload`:
-
-```lua
-dofile("/Users/you/code/rex-theme-importer/plugin.lua")("/Users/you/code/rex-theme-importer/ghostty-themes")
+git clone https://github.com/alexrlocke/rex-theme-importer.git ~/.config/rex/rex-theme-importer
+echo 'require("rex-theme-importer")' >> ~/.config/rex/init.lua
+rex config reload
 ```
 
 Importing goes through `rex do client.theme.import`, so Rex.app must have
@@ -32,7 +27,7 @@ cancel.
 
 ## Files
 
-- `plugin.lua` adds the palette command, which opens `ghostty-themes` in a
+- `init.lua` adds the palette command, which opens `ghostty-themes` in a
   floating pane.
 - `ghostty-themes` lists the themes (`~/.config/ghostty/themes`, then
   Ghostty.app's), runs fzf, draws each preview (`--preview FILE`), and
