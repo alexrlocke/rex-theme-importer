@@ -1,0 +1,131 @@
+#!/bin/bash
+# Pick a Ghostty theme with fzf, previewed in its own colors, then import
+# it into Rex. Enter imports; Esc cancels.
+#
+#   ghostty-themes             pick and import
+#   ghostty-themes --dry-run   pick, then print the theme's path
+#   ghostty-themes --preview FILE   (used by fzf) draw one theme's preview
+
+set -u
+# Rex may start this without a login shell, so make sure Homebrew's fzf is found
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+dirs=("$HOME/.config/ghostty/themes" "/Applications/Ghostty.app/Contents/Resources/ghostty/themes")
+rex="${REX_BIN_DIR:+$REX_BIN_DIR/}rex"
+esc=$'\e'
+
+# "#rrggbb" -> "r;g;b"
+rgb() {
+  local h=${1#\#}
+  printf '%d;%d;%d' $((16#${h:0:2})) $((16#${h:2:2})) $((16#${h:4:2}))
+}
+
+preview() {
+  local bg=000000 fg=ffffff cursor= cursor_text= sel_bg= sel_fg=
+  local -a pal
+  local raw key value i
+  while IFS= read -r raw || [ -n "$raw" ]; do
+    case $raw in '#'* | '') continue ;; esac
+    key=${raw%%=*}; key=${key//[[:space:]]/}
+    value=${raw#*=}; value=${value//[[:space:]]/}
+    case $key in
+      palette) i=${value%%=*}; [ "$i" -lt 16 ] 2>/dev/null && pal[i]=${value#*=} ;;
+      background) bg=$value ;;
+      foreground) fg=$value ;;
+      cursor-color) cursor=$value ;;
+      cursor-text) cursor_text=$value ;;
+      selection-background) sel_bg=$value ;;
+      selection-foreground) sel_fg=$value ;;
+    esac
+  done < "$1"
+  for i in $(seq 0 15); do [ -n "${pal[i]:-}" ] || pal[i]=$fg; done
+
+  local W=${FZF_PREVIEW_COLUMNS:-60} H=${FZF_PREVIEW_LINES:-30}
+  local BG FG line= len=0
+  BG=$(rgb "$bg"); FG=$(rgb "$fg")
+
+  # seg COLOR TEXT [bold]: add text in a palette color (or "fg") to the line
+  seg() {
+    local c=$FG
+    [ "$1" = fg ] || c=$(rgb "${pal[$1]}")
+    line+="$esc[${3:+1;}38;2;${c}m$2$esc[22m"
+    len=$((len + ${#2}))
+  }
+  # emit: print the line padded to the preview's width, in the background
+  emit() {
+    local pad=$((W - len - 2)); [ $pad -lt 0 ] && pad=0
+    printf '%s  %s%*s%s\n' "$esc[0;48;2;${BG}m" "$line" $pad '' "$esc[0m"
+    line= len=0
+  }
+
+  seg fg "${1##*/}" b; emit; emit
+  seg 8 "// TODO: pick a theme"; emit
+  seg 5 "const "; seg fg "std = "; seg 4 "@import"; seg fg "("; seg 2 '"std"'; seg fg ");"; emit
+  seg 5 "pub fn "; seg 4 "main"; seg fg "() "; seg 6 "!void"; seg fg " {"; emit
+  seg 5 "    var "; seg fg "count: "; seg 6 "u32"; seg fg " = "; seg 3 "42"; seg fg ";"; emit
+  seg 5 "    if "; seg fg "(count > "; seg 3 "99"; seg fg ") "; seg 5 "return "; seg 1 "error.TooMany"; seg fg ";"; emit
+  seg fg "    std.debug."; seg 4 "print"; seg fg "("; seg 2 '"{d}\n"'; seg fg ", .{count});"; emit
+  seg fg "}"; emit; emit
+  seg 4 "~/code" b; seg fg " on "; seg 5 "main"; seg 2 " $ " b; seg fg "ls"; emit
+  seg 12 "src/" b; seg fg "  build.zig  "; seg 10 "run.sh" b; seg fg "  "; seg 14 "link"; seg fg "  "; seg 13 "notes.md"; emit
+  seg 1 "error:" b; seg fg " expected type "; seg 11 "'u8'"; emit
+  seg 3 "warning:" b; seg fg " unused variable"; emit
+  seg 2 "ok" b; seg fg " 12 tests passed "; seg 9 "(0.4s)"; emit; emit
+
+  line+="$esc[38;2;$(rgb "${sel_fg:-$bg}");48;2;$(rgb "${sel_bg:-$fg}")mselected text$esc[48;2;${BG}m"
+  len=$((len + 13))
+  seg fg "  cursor "
+  line+="$esc[38;2;$(rgb "${cursor_text:-$bg}");48;2;$(rgb "${cursor:-$fg}")mx$esc[48;2;${BG}m"
+  len=$((len + 1)); emit; emit
+
+  # the 16 palette colors, two rows of eight
+  local r k n
+  for r in 0 8; do
+    for k in 0 1 2 3 4 5 6 7; do
+      n=$((r + k))
+      line+="$esc[38;2;${FG};48;2;$(rgb "${pal[n]}")m$(printf ' %-3s' $n)$esc[48;2;${BG}m"
+      len=$((len + 4))
+    done
+    emit
+  done
+
+  # fill the rest of the preview; the caller cuts it to H lines
+  for i in $(seq "$H"); do emit; done
+}
+
+# "name<TAB>path" for every theme, sorted by name
+themes() {
+  local d f
+  for d in "${dirs[@]}"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do [ -f "$f" ] && printf '%s\t%s\n' "${f##*/}" "$f"; done
+  done | sort -f -t $'\t' -k1,1
+}
+
+pick() {
+  local dry_run=${1:-} header="enter import  esc cancel" query= out path err
+  while :; do
+    out=$(themes | fzf --delimiter '\t' --with-nth 1 --layout reverse \
+      --prompt 'Ghostty theme > ' --info inline-right --header "$header" \
+      --query "$query" --print-query \
+      --preview "'$0' --preview {2}" \
+      --preview-window 'right,60%,border-left,noinfo,<40(hidden)' --gutter ' ' \
+      --bind 'resize:refresh-preview' \
+      --bind 'preview-scroll-up:up,preview-scroll-down:down,shift-up:ignore,shift-down:ignore') || exit 0
+    # out is the query, then "name<TAB>path"
+    query=${out%%$'\n'*}
+    path=${out##*$'\t'}
+
+    if [ -n "$dry_run" ]; then printf '%s\n' "$path"; exit 0; fi
+    if err=$("$rex" do client.theme.import "path=$path" 2>&1 >/dev/null); then exit 0; fi
+    err=${err#Error: }
+    header="Import failed: ${err%%$'\n'*}"
+  done
+}
+
+case ${1:-} in
+  --preview) preview "$2" | head -n "${FZF_PREVIEW_LINES:-30}" ;;
+  --dry-run) pick dry ;;
+  "") pick ;;
+  *) echo "usage: ghostty-themes [--dry-run]" >&2; exit 2 ;;
+esac
